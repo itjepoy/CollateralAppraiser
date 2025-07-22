@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">CollateralAppraiser</string>
+    <string name="title_activity_login">LoginActivity</string>
+    <string name="title_activity_collateral">CollateralActivity</string>
+</resources>
