@@ -15,7 +15,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
@@ -45,14 +47,18 @@ import androidx.compose.ui.graphics.Brush
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        DatabaseConfig.load(this)
+
         enableEdgeToEdge()
 
         val fullname = intent.getStringExtra("FULLNAME") ?: "User"
+        val empID = intent.getStringExtra("EmployeeID") ?: "123456789"
 
         setContent {
             CollateralAppraiserTheme {
-                MainScreen(fullname = fullname) {
-                    logoutUser(this)
+                MainScreen(fullname = fullname, empID = empID) {
+                    SessionManager.logoutUser(this)
                 }
             }
         }
@@ -63,7 +69,7 @@ class MainActivity : ComponentActivity() {
 data class BottomNavItem(val label: String, val icon: ImageVector)
 
 @Composable
-fun MainScreen(fullname: String, onLogout: () -> Unit) {
+fun MainScreen(fullname: String, empID: String, onLogout: () -> Unit) {
     val items = listOf(
         BottomNavItem("Home", Icons.Rounded.Home),
         BottomNavItem("Clients", Icons.Rounded.PersonSearch),
@@ -88,26 +94,12 @@ fun MainScreen(fullname: String, onLogout: () -> Unit) {
                 }
             }
         },
-//        floatingActionButton = {
-//            if (selectedItem == 0) {
-//                FloatingActionButton(
-//                    onClick = {
-//                        scope.launch {
-//                            snackbarHostState.showSnackbar("FAB clicked on Home!")
-//                        }
-//                    },
-//                    shape = RoundedCornerShape(16.dp)
-//                ) {
-//                    Icon(Icons.Default.Camera, contentDescription = "Capture")
-//                }
-//            }
-//        },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding)) {
             when (selectedItem) {
-                0 -> HomeScreen(fullname)
-                1 -> ClientsScreen()
+                0 -> HomeScreen(fullname, empID)
+                1 -> ClientsScreen(empID = empID)
                 2 -> InfoScreen(fullname = fullname, onLogout = onLogout)
             }
         }
@@ -115,7 +107,7 @@ fun MainScreen(fullname: String, onLogout: () -> Unit) {
 }
 
 @Composable
-fun HomeScreen(fullname: String) {
+fun HomeScreen(fullname: String, empID: String) {
     Box(modifier = Modifier.fillMaxSize()) {
         // Background image
         Image(
@@ -169,13 +161,30 @@ fun HomeScreen(fullname: String) {
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Badge,
+                        contentDescription = "ID Icon",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = empID,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-fun ClientsScreen(viewModel: ClientViewModel = viewModel()) {
+fun ClientsScreen(empID: String,viewModel: ClientViewModel = viewModel()) {
     val clientList by viewModel.clients.collectAsState()
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
@@ -221,14 +230,22 @@ fun ClientsScreen(viewModel: ClientViewModel = viewModel()) {
                             .padding(vertical = 4.dp)
                             .clickable {
                                 val intent = Intent(context, CollateralActivity::class.java).apply {
+                                    putExtra("client_id", client.indID)
                                     putExtra("client_name", client.fullname)
                                     putExtra("control_no", client.controlNo)
+                                    putExtra("emp_id", empID)
                                 }
                                 context.startActivity(intent)
                             },
                         elevation = CardDefaults.cardElevation(4.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = client.indID,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = client.fullname,
                                 fontSize = 18.sp,
@@ -248,33 +265,14 @@ fun ClientsScreen(viewModel: ClientViewModel = viewModel()) {
     }
 }
 
-@SuppressLint("UseKtx")
-fun logoutUser(context: Context) {
-    val sharedPref = context.getSharedPreferences("app_session", Context.MODE_PRIVATE)
-    sharedPref.edit()
-        .putBoolean("is_logged_in", false)
-        .remove("fullname")
-        .remove("employee_id")
-        .apply()
-
-    val db = SQLiteHandler(context)
-    db.deleteUsers()
-
-    val intent = Intent(context, LoginActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-    }
-    context.startActivity(intent)
-
-    if (context is Activity) {
-        context.finish()
-    }
-}
-
 @Composable
 fun InfoScreen(fullname: String, onLogout: () -> Unit) {
+    val scrollState = rememberScrollState()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -296,7 +294,8 @@ fun InfoScreen(fullname: String, onLogout: () -> Unit) {
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.Person,
@@ -307,42 +306,68 @@ fun InfoScreen(fullname: String, onLogout: () -> Unit) {
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = fullname,
-                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium)
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             )
         }
 
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(modifier = Modifier.height(24.dp))
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = "Associated Companies:",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                ),
                 modifier = Modifier.padding(bottom = 8.dp),
                 textAlign = TextAlign.Center
             )
-            Text("• Credit Masters and Lending Investors Corp.", textAlign = TextAlign.Center)
-            Text("• Cash Management Finance Inc.", textAlign = TextAlign.Center)
-            Text("• Camfin Lending Inc.", textAlign = TextAlign.Center)
+            listOf(
+                "Credit Masters and Lending Investors Corp.",
+                "Cash Management Finance Inc.",
+                "Camfin Lending Inc."
+            ).forEach{
+                Text(
+                    text = "• $it",
+                    style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Dev: EMP18020111229",
+            text = "Developer ID:",
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+        )
+        Text(
+            text = "EMP18020111229",
             style = MaterialTheme.typography.bodySmall.copy(
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.primary
-            ),
-            textAlign = TextAlign.Center
+            )
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
         Button(
             onClick = { onLogout() },
-            shape = RoundedCornerShape(12.dp)
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth(0.6f)
         ) {
-            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Logout", modifier = Modifier.size(20.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.Logout,
+                contentDescription = "Logout",
+                modifier = Modifier.size(20.dp)
+            )
             Spacer(modifier = Modifier.width(8.dp))
             Text("Logout")
         }
@@ -353,6 +378,6 @@ fun InfoScreen(fullname: String, onLogout: () -> Unit) {
 @Composable
 fun MainScreenPreview() {
     CollateralAppraiserTheme {
-        MainScreen(fullname = "Preview User", onLogout = {})
+        MainScreen(fullname = "Preview User", empID = "Preview ID", onLogout = {})
     }
 }

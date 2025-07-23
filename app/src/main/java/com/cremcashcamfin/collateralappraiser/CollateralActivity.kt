@@ -9,14 +9,12 @@ import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.widget.Space
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.launch
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -35,9 +33,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.AssignmentInd
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -52,12 +54,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -69,15 +73,20 @@ import com.cremcashcamfin.collateralappraiser.helper.DBHelper
 import com.cremcashcamfin.collateralappraiser.helper.ImageHelper
 import com.cremcashcamfin.collateralappraiser.helper.MapHelper
 import com.cremcashcamfin.collateralappraiser.ui.theme.CollateralAppraiserTheme
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.contracts.contract
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 
 class CollateralActivity : ComponentActivity() {
@@ -90,6 +99,7 @@ class CollateralActivity : ComponentActivity() {
             CollateralAppraiserTheme {
                 val clientName = intent.getStringExtra("client_name") ?: "Unknown Client"
                 val controlNo = intent.getStringExtra("control_no") ?: "Unknown Control No"
+                val indID = intent.getStringExtra("client_id") ?: "Unknown ID"
 
                 var colClass by remember { mutableStateOf("Loading...") }
 
@@ -157,15 +167,32 @@ class CollateralActivity : ComponentActivity() {
                             .fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        ClientInfoCard(name = clientName, controlNo = controlNo, colClass = colClass)
-
+                        var propertyLocation by remember { mutableStateOf<Location?>(null) }
+                        ClientInfoCard(indID = indID, name = clientName, controlNo = controlNo, colClass = colClass)
                         if (hasLocationPermission) {
-                            CurrentLocationMapCard()
+                            CurrentLocationMapCard(onLocationReceived = { loc ->
+                                propertyLocation = loc
+                                Toast.makeText(
+                                    context,
+                                    "${loc?.latitude} ${loc?.longitude}",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            })
                         } else {
                             Text("Location permission is required to show the map.")
                         }
 
-                        PhotoCaptureCard()
+                        if (propertyLocation != null) {
+                            PhotoCaptureCard(
+                                colClass = colClass,
+                                controlNo = controlNo,
+                                indID = indID,
+                                propLatitude = propertyLocation!!.latitude,
+                                propLongitude = propertyLocation!!.longitude
+                            )
+                        } else {
+                            Text("Waiting for location before capturing photo...")
+                        }
                     }
                 }
 
@@ -184,13 +211,17 @@ class CollateralActivity : ComponentActivity() {
 }
 
 @Composable
-fun ClientInfoCard(name: String, controlNo: String, colClass: String, modifier: Modifier = Modifier) {
+fun ClientInfoCard(indID: String, name: String, controlNo: String, colClass: String, modifier: Modifier = Modifier) {
     Card(
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                InfoItem(icon = Icons.Default.AssignmentInd, label = "ID", value = indID)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 InfoItem(icon = Icons.Default.Person, label = "Client Name", value = name)
             }
@@ -222,7 +253,7 @@ fun InfoItem(icon: ImageVector, label: String, value: String) {
 }
 
 @Composable
-fun CurrentLocationMapCard(modifier: Modifier = Modifier) {
+fun CurrentLocationMapCard(modifier: Modifier = Modifier, onLocationReceived: (Location?) -> Unit) {
     val context = LocalContext.current
     var location by remember { mutableStateOf<Location?>(null) }
     var isLoading by remember { mutableStateOf(true) }
@@ -230,8 +261,10 @@ fun CurrentLocationMapCard(modifier: Modifier = Modifier) {
     val cameraPositionState = rememberCameraPositionState()
 
     LaunchedEffect(Unit) {
-        location = MapHelper.getCurrentLocation(context)
+        val current = MapHelper.getCurrentLocation(context)
+        location = current
         isLoading = false
+        onLocationReceived(current)
     }
 
     Card(
@@ -271,9 +304,11 @@ fun CurrentLocationMapCard(modifier: Modifier = Modifier) {
 
 @RequiresApi(Build.VERSION_CODES.P)
 @Composable
-fun PhotoCaptureCard(modifier: Modifier = Modifier) {
+fun PhotoCaptureCard(modifier: Modifier = Modifier, colClass: String, controlNo: String, indID: String, propLatitude: Double, propLongitude: Double) {
     val context = LocalContext.current
     val activity = context as? Activity
+
+    val empID = activity?.intent?.getStringExtra("emp_id") ?: "Unknown"
 
     var imageUri by remember { mutableStateOf<Uri?>(null) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -282,12 +317,35 @@ fun PhotoCaptureCard(modifier: Modifier = Modifier) {
     var title by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
 
+    val fusedLocationClient = remember {
+        LocationServices.getFusedLocationProviderClient(context)
+    }
+
+    var currentLocation by remember { mutableStateOf<Location?>(null) }
+    val photoLocations = remember { mutableStateListOf<Location>() }
+    var totalDistanceMeters  by remember { mutableStateOf(0.0) }
+
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         if (success && imageUri != null) {
             val source = ImageDecoder.createSource(context.contentResolver, imageUri!!)
             bitmap = ImageDecoder.decodeBitmap(source)
+
+            if (colClass == "REM") {
+                currentLocation?.let { location ->
+                    photoLocations.add(location)
+                    if (photoLocations.size >= 2) {
+                        var distance = 0.0
+                        for (i in 0 until photoLocations.size - 1) {
+                            val start = photoLocations[i]
+                            val end = photoLocations[i + 1]
+                            distance += start.distanceTo(end)
+                        }
+                        totalDistanceMeters += distance
+                    }
+                }
+            }
         }
         isLoading = false
     }
@@ -295,54 +353,71 @@ fun PhotoCaptureCard(modifier: Modifier = Modifier) {
     Card(
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(20.dp)) {
             Text(
-                text = "Collateral Photo",
-                style = MaterialTheme.typography.titleMedium
+                text = "📸 Collateral Photo",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                label = { Text("Title") },
+                label = { Text("Photo Title") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             OutlinedTextField(
                 value = description,
                 onValueChange = { description = it },
                 label = { Text("Description") },
                 modifier = Modifier.fillMaxWidth(),
-                maxLines = 4
+                maxLines = 4,
+                shape = RoundedCornerShape(12.dp)
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            Button(onClick = {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                    == PackageManager.PERMISSION_GRANTED
-                ) {
-                    val uri = ImageHelper.createImageUri(context)
-                    imageUri = uri
-                    isLoading = true
-                    uri?.let { launcher.launch(it) }
-                } else {
-                    Toast.makeText(context, "Camera permission is required", Toast.LENGTH_SHORT).show()
-                }
-            },
-                enabled = title.isNotBlank() && description.isNotBlank()
+            Button(
+                onClick = {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        MapHelper.fetchPropertyLocation(context, fusedLocationClient) { location ->
+                            if (location != null) {
+                                currentLocation = location
+                                val uri = ImageHelper.createImageUri(context)
+                                imageUri = uri
+                                isLoading = true
+                                uri?.let { launcher.launch(it) }
+                            } else {
+                                Toast.makeText(context, "Unable to get location", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+
+                    } else {
+                        Toast.makeText(context, "Camera and Location permission are required", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                enabled = title.isNotBlank() && description.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
             ) {
+                Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
                 Text("Take Photo")
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             when {
                 isLoading -> {
@@ -355,15 +430,109 @@ fun PhotoCaptureCard(modifier: Modifier = Modifier) {
                         CircularProgressIndicator()
                     }
                 }
+
                 bitmap != null -> {
                     Image(
                         bitmap = bitmap!!.asImageBitmap(),
                         contentDescription = "Captured Image",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(12.dp)),
                         contentScale = ContentScale.Crop
                     )
+                }
+            }
+
+            if (bitmap != null) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Button(
+                    onClick = {
+                        if (title.isNotBlank() && description.isNotBlank()) {
+                            val ext = ImageHelper.getExtensionFromUri(context, imageUri!!) ?: "jpg"
+                            val imageBytes = ImageHelper.bitmapToByteArray(bitmap!!)
+                            val timestamp = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
+                            val fileName = "COLL${indID}_${colClass.uppercase()}_${timestamp}_${title}.$ext"
+
+                            val latitude = currentLocation?.latitude
+                            val longitude = currentLocation?.longitude
+
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val success = DBHelper.saveCollateralPhoto(
+                                    colClass = colClass,
+                                    indID = indID,
+                                    controlNo = controlNo,
+                                    filename = fileName,
+                                    title = title,
+                                    description = description,
+                                    ext = ext,
+                                    imageBytes = imageBytes,
+                                    latitude = latitude,
+                                    longitude = longitude
+                                )
+
+                                if (colClass == "REM"){
+                                    if (success) {
+                                        DBHelper.savePropertyCoordinate(
+                                            indID = indID,
+                                            controlNo = controlNo,
+                                            latitude = propLatitude,
+                                            longitude = propLongitude,
+                                            empID = empID
+                                        )
+                                    }
+                                }
+
+                                withContext(Dispatchers.Main) {
+                                    if (success) {
+                                        Toast.makeText(context, "Saved successfully!", Toast.LENGTH_SHORT).show()
+                                        title = ""
+                                        description = ""
+                                        imageUri = null
+                                        bitmap = null
+                                        isLoading = false
+                                    } else {
+                                        Toast.makeText(context, "Failed to save.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Save to Database")
+                }
+            }
+
+            if (colClass == "REM") {
+                if (photoLocations.size > 1) {
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ){
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Distance Tracker",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Total distance walked around property: %.2f meters".format(totalDistanceMeters),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -376,6 +545,6 @@ fun PhotoCaptureCard(modifier: Modifier = Modifier) {
 @Composable
 fun GreetingPreview() {
     CollateralAppraiserTheme {
-        ClientInfoCard(name = "Juan Dela Cruz", controlNo = "CTRL-001", colClass = "REM")
+        ClientInfoCard(indID = "001", name = "Juan Dela Cruz", controlNo = "CTRL-001", colClass = "REM")
     }
 }
